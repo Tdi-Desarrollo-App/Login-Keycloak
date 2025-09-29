@@ -22,7 +22,11 @@ function App() {
         value={keycloak.token}
       />
       <br /><br />
-      <button onClick={() => keycloak.logout({ redirectUri: 'http://localhost:3000/' })}>
+      <button
+        onClick={() =>
+          keycloak.logout({ redirectUri: 'https://login.devcastellanos.site/' })
+        }
+      >
         Cerrar sesión
       </button>
     </div>
