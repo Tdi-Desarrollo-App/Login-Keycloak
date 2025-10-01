@@ -1,16 +1,22 @@
 // server/index.js
 import express from "express";
 import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
 import photoProxy from "./photo-proxy.js";
 import { keycloakAuth } from "./keycloakAuth.js";
 import profile from "./profile.js";
 
 dotenv.config();
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const app = express();
 const PORT = Number(process.env.SERVER_PORT) || 4001;
+const HOST = "0.0.0.0";
 
-// CORS simple en dev (si front corre en otro puerto)
+// CORS solo si realmente lo necesitas (dominios distintos front/api)
 if (process.env.ALLOWED_ORIGIN) {
   app.use((req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", process.env.ALLOWED_ORIGIN);
@@ -21,19 +27,23 @@ if (process.env.ALLOWED_ORIGIN) {
   });
 }
 
-// Protege todo lo que cuelga de /api con JWT de Keycloak
-app.use("/api", keycloakAuth);
-
-
+// ---------- Rutas de API (protegidas) ----------
+app.use("/api", keycloakAuth, photoProxy);
 app.use("/api", keycloakAuth, profile);
 
-
-// Rutas
-app.use("/api", photoProxy);
-
-// Healthcheck
+// Health
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-app.listen(PORT, () => {
-  console.log(`API listening on http://localhost:${PORT}`);
+// ---------- FRONTEND ESTÁTICO (CRA build) ----------
+const STATIC_DIR = path.resolve(__dirname, "../build");
+app.use(express.static(STATIC_DIR));
+
+// Fallback SPA: cualquier ruta NO /api devuelve index.html
+app.get(/^\/(?!api\/).*/, (_req, res) => {
+  res.sendFile(path.join(STATIC_DIR, "index.html"));
+});
+
+app.listen(PORT, HOST, () => {
+  console.log(`Server listening on http://${HOST}:${PORT}`);
+  console.log(`Serving static from: ${STATIC_DIR}`);
 });
