@@ -1,28 +1,45 @@
-# Stage 1: build React app
-FROM node:20-alpine AS build
-
+# ---------- 1) Build stage: compila el frontend ----------
+FROM node:20-alpine AS builder
 WORKDIR /app
 
-# Copiar package.json y package-lock.json
+# Copia de manifiestos e instalación limpia (más cacheable)
 COPY package*.json ./
+RUN npm ci
 
-# Instalar dependencias
-RUN npm install
-
-# Copiar todo el código
+# Copia el resto del código (frontend + server)
 COPY . .
 
-# Construir la app para producción
+# Compila el frontend (React): genera /app/build
+# - Para CRA: npm run build
+# - Para Vite: npm run build (asegúrate de tener script "build" configurado)
 RUN npm run build
 
-# Stage 2: servir con NGINX
-FROM nginx:alpine
 
-# Copiar build al directorio de nginx
-COPY --from=build /app/build /usr/share/nginx/html
+# ---------- 2) Runtime stage: solo lo necesario para producción ----------
+FROM node:20-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
 
-# Exponer puerto 80
-EXPOSE 80
+# Variables típicas del backend (ajústalas en docker run / compose)
+# KC_URL, KC_REALM, AZ_ALIAS son para el broker de Azure via Keycloak
+ENV SERVER_PORT=4001 \
+    KC_URL=https://auth.devcastellanos.site \
+    KC_REALM=Login \
+    AZ_ALIAS=azure
 
-# Iniciar nginx en foreground
-CMD ["nginx", "-g", "daemon off;"]
+# Copiamos:
+# - build/ del frontend
+# - server/ con el código de la API
+# - package.json para instalar deps de producción
+COPY --from=builder /app/build ./build
+COPY --from=builder /app/server ./server
+COPY --from=builder /app/package*.json ./
+
+# Instala SOLO producción
+RUN npm ci --omit=dev
+
+# Expone el puerto del backend
+EXPOSE 4001
+
+# Comando de inicio
+CMD ["node", "server/index.js"]
