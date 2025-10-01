@@ -1,62 +1,110 @@
 // src/keycloak.js
 import Keycloak from "keycloak-js";
 
-const keycloak = new Keycloak({
-  url: "https://auth.devcastellanos.site/",   // URL de tu Keycloak
-  realm: "Login",                             // Tu Realm
-  clientId: "react-app",                      // Cliente que creaste en Keycloak
-});
+// Reusa la instancia entre recargas (HMR) y navegación
+const kcInstance = (() => {
+  if (typeof window !== "undefined" && window.__kc_instance) {
+    return window.__kc_instance;
+  }
+  const inst = new Keycloak({
+    url: "https://auth.devcastellanos.site/",
+    realm: "Login",
+    clientId: "react-app",
+  });
+  if (typeof window !== "undefined") {
+    window.__kc_instance = inst;
+  }
+  return inst;
+})();
 
-const initKeycloak = (onAuthenticatedCallback) => {
-  keycloak
-    .init({
-      onLoad: "login-required",   // fuerza login al entrar
-      pkceMethod: "S256",         // recomendado para SPAs
-      checkLoginIframe: false,    // evita iframes en dev
-    })
-    .then((authenticated) => {
-      if (authenticated) {
-        // Carga info del usuario
-        keycloak.loadUserInfo().then((userInfo) => {
-          keycloak.userInfo = userInfo; // guarda info de usuario
-          onAuthenticatedCallback && onAuthenticatedCallback();
-        });
-      } else {
-        console.warn("No autenticado");
-      }
-    })
-    .catch((err) => {
-      console.error("Error inicializando Keycloak:", err);
-    });
+let initPromise =
+  (typeof window !== "undefined" && window.__kc_init_promise) || null;
+let initDone =
+  (typeof window !== "undefined" && window.__kc_init_done) || false;
 
-  // Refrescar token cada minuto
+// Refresco de token (una sola vez)
+let refreshTimerStarted =
+  (typeof window !== "undefined" && window.__kc_refresh_started) || false;
+
+const startRefreshTimer = () => {
+  if (refreshTimerStarted) return;
+  refreshTimerStarted = true;
+  if (typeof window !== "undefined") window.__kc_refresh_started = true;
+
   setInterval(() => {
-    if (keycloak.authenticated) {
-      keycloak
-        .updateToken(70) // refresca si quedan < 70 seg
+    if (kcInstance.authenticated) {
+      kcInstance
+        .updateToken(70)
         .then((refreshed) => {
-          if (refreshed) console.log("Token refrescado");
+          if (refreshed) console.log("[KC] Token refrescado");
         })
-        .catch(() => console.warn("Error refrescando token"));
+        .catch(() => console.warn("[KC] Error refrescando token"));
     }
   }, 60 * 1000);
 };
 
-// Función para cerrar sesión
-const logout = () => {
-  keycloak.logout({
-    redirectUri: "https://login.devcastellanos.site/", // donde quieres que regrese el usuario
+export const initKeycloak = (onAuthenticatedCallback) => {
+  // Si ya terminamos la init, invoca callback y regresa promesa resuelta
+  if (initDone) {
+    onAuthenticatedCallback && onAuthenticatedCallback();
+    return Promise.resolve(true);
+  }
+  // Si hay una init en progreso, cuélgate de esa promesa
+  if (initPromise) {
+    return initPromise.then(() => {
+      onAuthenticatedCallback && onAuthenticatedCallback();
+      return true;
+    });
+  }
+
+  // Primera (y única) inicialización real
+  initPromise = kcInstance
+    .init({
+      onLoad: "login-required",
+      pkceMethod: "S256",
+      checkLoginIframe: false,
+    })
+    .then(async (authenticated) => {
+      if (!authenticated) {
+        console.warn("[KC] No autenticado");
+        return false;
+      }
+      try {
+        const userInfo = await kcInstance.loadUserInfo();
+        kcInstance.userInfo = userInfo;
+      } catch (e) {
+        console.warn("[KC] No se pudo cargar userInfo:", e);
+      }
+      startRefreshTimer();
+      initDone = true;
+      if (typeof window !== "undefined") {
+        window.__kc_init_done = true;
+        window.__kc_init_promise = initPromise;
+      }
+      onAuthenticatedCallback && onAuthenticatedCallback();
+      return true;
+    })
+    .catch((err) => {
+      console.error("[KC] Error inicializando Keycloak:", err);
+      throw err;
+    });
+
+  if (typeof window !== "undefined") {
+    window.__kc_init_promise = initPromise;
+  }
+  return initPromise;
+};
+
+export const keycloak = kcInstance;
+
+export const logout = () => {
+  kcInstance.logout({
+    redirectUri: "http://localhost:3000/",
   });
 };
 
-// Función para verificar roles
-const hasRole = (role) => {
-  const realmRoles = keycloak.realmAccess?.roles || [];
-  const clientRoles = Object.values(keycloak.resourceAccess || {}).reduce(
-    (acc, cur) => acc.concat(cur.roles || []),
-    []
-  );
-  return realmRoles.includes(role) || clientRoles.includes(role);
+// ✅ Lectura correcta de realm roles
+export const hasRole = (role) => {
+  const roles = keycloak?.tokenParsed?.realm_access?.roles || [];
+  return roles.includes(role);
 };
-
-export { keycloak, initKeycloak, logout, hasRole };
